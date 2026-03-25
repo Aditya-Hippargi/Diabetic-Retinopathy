@@ -363,6 +363,136 @@ def load_preprocessed_image(
     return img
 
 
+def is_retinal_image(
+    img: np.ndarray,
+    min_confidence: float = 0.45
+) -> tuple:
+    """
+    Check whether an image looks like a retinal fundus photograph.
+    Uses heuristic checks based on known visual properties of fundus images:
+      1. Red channel dominance (blood vessels, optic disc)
+      2. Circular dark-border structure (fundus camera aperture)
+      3. Color histogram concentration in warm tones
+
+    Args:
+        img: Input image in BGR or RGB format (uint8, shape H×W×3)
+        min_confidence: Minimum weighted score to accept (0.0–1.0, default 0.45)
+
+    Returns:
+        Tuple of (is_valid: bool, confidence: float, reason: str)
+          - is_valid   : True if the image passes the retinal check
+          - confidence : Weighted score between 0 and 1
+          - reason     : Human-readable explanation
+    """
+    if img is None or img.ndim != 3 or img.shape[2] != 3:
+        return False, 0.0, "Invalid image (must be a 3-channel color image)"
+
+    # Work in RGB — convert if BGR (heuristic: OpenCV loads as BGR)
+    # The caller should document which format they pass.
+    # We'll assume BGR input (consistent with cv2.imread used in this file).
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.shape[2] == 3 else img
+
+    h, w = rgb.shape[:2]
+    r, g, b = rgb[:, :, 0].astype(float), rgb[:, :, 1].astype(float), rgb[:, :, 2].astype(float)
+
+    # ── 1. Red Channel Dominance Score ────────────────────────────
+    # Retinal images are strongly red-dominant (mean_R > mean_G > mean_B)
+    mean_r, mean_g, mean_b = r.mean(), g.mean(), b.mean()
+
+    # Avoid division by zero
+    total_mean = mean_r + mean_g + mean_b + 1e-8
+
+    # Red ratio: how much of the total brightness comes from the red channel
+    red_ratio = mean_r / total_mean  # Typical retinal: 0.42–0.55
+
+    if red_ratio > 0.40 and mean_r > mean_g:
+        red_score = min(1.0, (red_ratio - 0.35) / 0.15)
+    elif red_ratio > 0.33:
+        red_score = 0.3
+    else:
+        red_score = 0.0
+
+    # ── 2. Circular Dark Border Score ─────────────────────────────
+    # Fundus images have dark corners and bright center
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.shape[2] == 3 else img
+
+    # Sample corner vs center brightness
+    margin = min(h, w) // 8
+    center_region = gray[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
+    corners = np.concatenate([
+        gray[:margin, :margin].ravel(),
+        gray[:margin, -margin:].ravel(),
+        gray[-margin:, :margin].ravel(),
+        gray[-margin:, -margin:].ravel()
+    ])
+
+    center_brightness = center_region.mean()
+    corner_brightness = corners.mean()
+
+    # Retinal images: corners are much darker than center
+    if corner_brightness < 50 and center_brightness > 60:
+        circle_score = min(1.0, (center_brightness - corner_brightness) / 100.0)
+    elif corner_brightness < center_brightness * 0.6:
+        circle_score = 0.5
+    else:
+        circle_score = 0.1
+
+    # ── 3. Color Histogram Score ──────────────────────────────────
+    # Retinal images have concentrated, non-uniform histograms
+    # with significant spread in the red channel
+    r_hist = cv2.calcHist([rgb[:, :, 0]], [0], None, [256], [0, 256]).ravel()
+    g_hist = cv2.calcHist([rgb[:, :, 1]], [0], None, [256], [0, 256]).ravel()
+
+    # Normalize
+    r_hist = r_hist / (r_hist.sum() + 1e-8)
+    g_hist = g_hist / (g_hist.sum() + 1e-8)
+
+    # Check that the red histogram isn't concentrated in a single spike
+    # (which would indicate a solid-color or test image)
+    r_nonzero_bins = np.sum(r_hist > 0.001)
+    g_nonzero_bins = np.sum(g_hist > 0.001)
+
+    # Retinal images typically have 30-150 active bins in red channel
+    if 20 < r_nonzero_bins < 200 and 10 < g_nonzero_bins < 200:
+        hist_score = min(1.0, r_nonzero_bins / 80.0)
+    elif r_nonzero_bins < 10:
+        hist_score = 0.0  # Too uniform → likely not retinal
+    else:
+        hist_score = 0.3
+
+    # ── Weighted Combination ──────────────────────────────────────
+    # Red dominance is the strongest signal, circular border next
+    confidence = (
+        0.40 * red_score +
+        0.35 * circle_score +
+        0.25 * hist_score
+    )
+
+    is_valid = confidence >= min_confidence
+
+    # Build reason string
+    if is_valid:
+        reason = (
+            f"Image appears to be a retinal fundus photograph "
+            f"(confidence: {confidence:.0%})"
+        )
+    else:
+        failing = []
+        if red_score < 0.3:
+            failing.append("lacks red-channel dominance typical of retinal images")
+        if circle_score < 0.3:
+            failing.append("no circular dark-border structure detected")
+        if hist_score < 0.3:
+            failing.append("color histogram doesn't match retinal patterns")
+        reason = (
+            f"This does NOT appear to be a retinal fundus image "
+            f"(confidence: {confidence:.0%}). "
+            + "; ".join(failing).capitalize()
+        )
+
+    return is_valid, confidence, reason
+
+
 def main():
     """
     Demo of preprocessing functions
