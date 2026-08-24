@@ -15,6 +15,26 @@ import cv2
 import sys
 import datetime
 import matplotlib.pyplot as plt
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def safe_strftime(ts, fmt='%d %b %Y, %I:%M %p'):
+    """Safe date formatting with IST (UTC+5:30) adjustment for Streamlit Cloud."""
+    if ts is None: return "N/A"
+    
+    # 1. Convert to datetime object
+    dt = ts
+    if not hasattr(ts, 'strftime'):
+        try:
+            dt = datetime.datetime.fromisoformat(str(ts))
+        except:
+            return str(ts)
+    
+    # 2. Add IST Offset (5h 30m) if on Cloud
+    # Streamlit Cloud (Linux) is UTC. Local (Windows) is already local time.
+    if os.path.sep == '/' or os.environ.get('STREAMLIT_RUNTIME_ENV') == 'cloud':
+        dt = dt + datetime.timedelta(hours=5, minutes=30)
+        
+    return dt.strftime(fmt)
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 from tensorflow import keras
@@ -30,8 +50,10 @@ sys.path.insert(0, os.path.join(PROJECT_DIR, 'src'))
 from new_database import (
     setup_new_database, insert_new_scan, get_all_new_scans,
     get_new_stats, search_new_scans, delete_new_scan, get_new_scan_by_id,
+    register_user, verify_user,
     MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS
 )
+import hashlib
 from preprocess import is_retinal_image, ben_graham_preprocessing
 from gradcam_utils import compute_gradcam
 
@@ -60,8 +82,8 @@ st.markdown("""
     .stApp .stMarkdown p, .stApp .stMarkdown li { color: #333333 !important; }
 
     /* ── Sidebar ── */
-    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #C0392B 0%, #E74C3C 40%, #F39C12 100%); color: white !important; }
-    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] * { color: white !important; }
+    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #C0392B 0%, #E74C3C 40%, #D35400 100%); color: white !important; }
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] * { color: #FFFFFF !important; font-weight: 500 !important; }
 
     /* ── Glassmorphism Sidebar Navigation ── */
     div[role="radiogroup"] {
@@ -128,8 +150,8 @@ st.markdown("""
         transform: translateY(-8px);
         box-shadow: 0 12px 30px rgba(192, 57, 43, 0.15);
     }
-    .stat-label { font-size: 0.9rem; color: #7F8C8D; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
-    .stat-number { font-size: 2.2rem; font-weight: 700; margin-top: 5px; }
+    .stat-label { font-size: 0.9rem; color: #2C3E50; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+    .stat-number { font-size: 2.2rem; font-weight: 800; margin-top: 5px; }
 
     /* ── Result Card ── */
     .result-card {
@@ -218,6 +240,22 @@ st.markdown("""
         cursor: wait !important;
         border: 1px dashed #E74C3C !important;
     }
+
+    /* ── Login Screen (Better Targeting) ── */
+    [data-testid="stAppViewContainer"]:has(.login-card) {
+        background: linear-gradient(135deg, #FDFCFB 0%, #E2D1C3 100%) !important;
+    }
+    .login-card {
+        background: white;
+        padding: 50px;
+        border-radius: 24px;
+        box-shadow: 0 15px 45px rgba(0,0,0,0.1);
+        text-align: center;
+        margin-top: 50px;
+    }
+    .login-logo { font-size: 4rem; margin-bottom: 20px; }
+    .login-title { font-size: 1.8rem; font-weight: 800; color: #2C3E50; margin-bottom: 10px; }
+    .login-subtitle { color: #2C3E50; margin-bottom: 30px; font-size: 1rem; font-weight: 500; }
 </style>
 
 
@@ -257,22 +295,92 @@ def run_inference(img_array, model):
     pred_grade = int(np.argmax(probs))
     return probs, pred_grade, float(probs[pred_grade])
 
+# ── Authentication Helper ─────────────────────────────────────────────────────
+def check_auth():
+    """Session-based authentication with Login and Sign Up."""
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        _, center, _ = st.columns([1, 2, 1])
+        with center:
+            st.markdown("""
+                <div class='login-card'>
+                    <div class='login-logo'>👁️‍🗨️</div>
+                    <div class='login-title'>Medical Portal Access</div>
+                    <div class='login-subtitle'>RetinaScan AI Research & Diagnostic Suite</div>
+                </div>
+                <br>
+            """, unsafe_allow_html=True)
+            
+            tab1, tab2 = st.tabs(["🔒 Login", "📝 Sign Up"])
+
+            with tab1:
+                st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px;'>Username</p>", unsafe_allow_html=True)
+                login_user = st.text_input("Username", placeholder="e.g. admin", key="login_user", label_visibility="collapsed")
+                
+                st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Portal Password</p>", unsafe_allow_html=True)
+                login_pass = st.text_input("Portal Password", type="password", key="login_pass", placeholder="••••••••", label_visibility="collapsed")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Enter Portal", key="login_btn", use_container_width=True):
+                    pass_hash = hashlib.sha256(login_pass.encode()).hexdigest()
+                    if verify_user(login_user, pass_hash):
+                        st.session_state["authenticated"] = True
+                        st.session_state["username"] = login_user
+                        st.rerun()
+                    else:
+                        st.error("Access Denied: Invalid Credentials")
+
+            with tab2:
+                st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px;'>New Username</p>", unsafe_allow_html=True)
+                reg_user = st.text_input("New Username", placeholder="e.g. doctor_smith", key="reg_user", label_visibility="collapsed")
+                
+                st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Create Password</p>", unsafe_allow_html=True)
+                reg_pass = st.text_input("Create Password", type="password", key="reg_pass", placeholder="••••••••", label_visibility="collapsed")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Register Account", key="reg_btn", use_container_width=True):
+                    if len(reg_user) < 3 or len(reg_pass) < 4:
+                        st.warning("Username must be >= 3 chars, Password >= 4 chars.")
+                    else:
+                        pass_hash = hashlib.sha256(reg_pass.encode()).hexdigest()
+                        if register_user(reg_user, pass_hash):
+                            st.success(f"Account '{reg_user}' created successfully! You can now log in.")
+                        else:
+                            st.error("Registration failed. Username might already exist.")
+        st.stop()
+
 # ── Database Init ─────────────────────────────────────────────────────────────
 try:
     setup_new_database()
     db_available = True
+    
+    # Safely insert default admin to prevent lockout 
+    # (will return False quietly if account already exists, which is safe)
+    admin_hash = hashlib.sha256("Jeet@0808".encode()).hexdigest()
+    register_user("admin", admin_hash)
 except Exception:
     db_available = False
+
+# Protect the entire application after DB is guaranteed to exist
+check_auth() 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("<h1 style='color: white; margin-bottom: 0;'>👁️ RetinaScan AI</h1>", unsafe_allow_html=True)
     st.markdown("<p style='color: rgba(255,255,255,0.8); font-style: italic; margin-top: -5px;'>Diabetic Retinopathy (DR) Detection</p>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
+    current_user = st.session_state.get("username", "admin")
+    st.markdown(f"<p style='color: rgba(255,255,255,0.9); font-size:0.9rem; background: rgba(255,255,255,0.15); padding: 8px 14px; border-radius: 8px;'>👤 {current_user}</p>", unsafe_allow_html=True)
     
     page = st.radio("Navigate", ["Dashboard", "Scan & Predict", "Patient Records", "Research Validation", "About"], label_visibility="collapsed")
     
     st.markdown("<div style='position: fixed; bottom: 20px;'>", unsafe_allow_html=True)
+    if st.button("🚪 Logout", key="logout_btn"):
+        st.session_state["authenticated"] = False
+        st.session_state.pop("username", None)
+        st.rerun()
     st.markdown("<hr style='border: 0.5px solid rgba(255,255,255,0.2); margin: 20px 0;'>", unsafe_allow_html=True)
     st.markdown("<p style='font-size: 0.85rem; color: rgba(255,255,255,0.7);'>EfficientNetB4<br>Accuracy: 82.05%</p>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -287,7 +395,7 @@ if page == "Dashboard":
     """, unsafe_allow_html=True)
 
     if db_available:
-        stats = get_new_stats()
+        stats = get_new_stats(username=current_user)
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -318,7 +426,7 @@ if page == "Dashboard":
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<br><div class='section-header'><h3>🕐 Recent Scans</h3></div>", unsafe_allow_html=True)
-        for row in get_all_new_scans()[:5]:
+        for row in get_all_new_scans(username=current_user)[:5]:
             st.markdown(f"""
             <div style='background: white; border-radius: 12px; padding: 15px 25px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border-left: 5px solid {GRADE_COLORS[row[4]]}; display: flex; justify-content: space-between; align-items: center;'>
                 <div>
@@ -327,7 +435,7 @@ if page == "Dashboard":
                 </div>
                 <div style='display: flex; align-items: center; gap: 24px;'>
                     <span class='grade-badge grade-{row[4]}'>{row[5]}</span>
-                    <span style='color: #7F8C8D; font-size: 0.85rem;'>{row[11].strftime('%d %b %Y')}</span>
+                    <span style='color: #7F8C8D; font-size: 0.85rem;'>{safe_strftime(row[11], '%d %b %Y')}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -404,8 +512,11 @@ elif page == "Scan & Predict":
                 try:
                     for label, img_bgr, img_state in images_ready:
                         if img_state == "RAW":
-                            temp_p = os.path.join(PROJECT_DIR, 'data', f'temp_{label.replace(" ","_")}.png')
-                            cv2.imwrite(temp_p, img_bgr)
+                            temp_dir = os.path.join(PROJECT_DIR, 'data')
+                            os.makedirs(temp_dir, exist_ok=True)
+                            temp_p = os.path.join(temp_dir, f'temp_{label.replace(" ","_")}.png')
+                            if not cv2.imwrite(temp_p, img_bgr):
+                                raise IOError(f"Failed to write temporary image to {temp_p}")
                             img_pre = ben_graham_preprocessing(temp_p, (IMG_SIZE, IMG_SIZE))
                         else:
                             img_pre = cv2.resize(img_bgr, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LANCZOS4)
@@ -490,7 +601,7 @@ elif page == "Scan & Predict":
                     cv2.imwrite(gc_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR), 
                                                    cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR), 
                                                    cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
-                    rid = insert_new_scan(res['name'], res['age'], label, res['grade'], res['conf'], res['probs'].tolist(), gc_path, MODEL_VERSION_82PCT, res['notes'])
+                    rid = insert_new_scan(res['name'], res['age'], label, res['grade'], res['conf'], res['probs'].tolist(), gc_path, MODEL_VERSION_82PCT, res['notes'], created_by=current_user)
                     if rid: saved_ids.append(str(rid))
                 if saved_ids:
                     st.session_state['last_saved_id'] = ", ".join(saved_ids)
@@ -503,14 +614,14 @@ elif page == "Scan & Predict":
 elif page == "Patient Records":
     st.markdown("<div class='section-header'><h2>Patient Records</h2><p>Database: scans (EfficientNetB4)</p></div>", unsafe_allow_html=True)
     if db_available:
-        scans = get_all_new_scans()
+        scans = get_all_new_scans(username=current_user)
         if not scans:
             st.info("No records found. Complete a scan and click 'Save to Patient Database' to see it here.")
         
         for r in scans:
-            # r indices: 0:id, 1:name, 2:age, 3:eye, 4:grade, 5:grade_name, 6:conf, 7:probs, 8:gradcam, 9:model, 10:risk, 11:date, 12:notes
-            if len(r) == 13:
-                rid, name, age, eye, grade, grade_name, conf, _, img_path, db_model, risk, ts, notes = r
+            # r indices: 0:id, 1:name, 2:age, 3:eye, 4:grade, 5:grade_name, 6:conf, 7:probs, 8:gradcam, 9:model, 10:risk, 11:date, 12:notes, 13:created_by
+            if len(r) >= 13:
+                rid, name, age, eye, grade, grade_name, conf, _, img_path, db_model, risk, ts, notes = r[:13]
             else:
                 # Fallback for unexpected schema variations
                 rid, name, age, eye, grade, grade_name, conf = r[:7]
@@ -533,7 +644,7 @@ elif page == "Patient Records":
 <div style='color: #7F8C8D;'>Eye</div>
 <div style='color: #2C3E50; font-weight: 500;'>{eye} Eye</div>
 <div style='color: #7F8C8D;'>Scan Date</div>
-<div style='color: #2C3E50; font-weight: 500;'>{ts.strftime('%d %b %Y, %I:%M %p')}</div>
+<div style='color: #2C3E50; font-weight: 500;'>{safe_strftime(ts)}</div>
 </div>
 </div>
 <div style='flex: 1; text-align: right;'>
@@ -549,10 +660,8 @@ elif page == "Patient Records":
 </div>
 </div>""", unsafe_allow_html=True)
                 
-                # Image preview in expander to save space
-                if img_path and os.path.exists(img_path):
-                    with st.expander("🔍 View Diagnostic Scan (Grad-CAM)"):
-                        st.image(img_path, caption=f"Stored Visualization — {db_model}", use_container_width=True)
+                # Image preview removed as per user request
+
                 
                 col_del = st.columns([1, 4])[0]
                 with col_del:
@@ -684,8 +793,8 @@ elif page == "Research Validation":
     st.markdown(f"""
     <br><br>
     <div style='text-align: center; background: #922B21; color: #FFFFFF !important; padding: 40px; border-radius: 18px; box-shadow: 0 10px 35px rgba(192, 57, 43, 0.2); border: 2px solid #C0392B;'>
-        <div style='color: #FFFFFF !important; margin:0; letter-spacing: 2px; text-transform: uppercase; font-size: 1.5rem; font-weight: 700;'>Research Conclusion</div>
-        <div style='color: #FADBD8 !important; margin-top: 15px; font-size: 1.15rem; line-height: 1.7; font-weight: 400;'>
+        <div style='color: #FFFFFF !important; margin:0; letter-spacing: 2px; text-transform: uppercase; font-size: 1.5rem; font-weight: 800;'>Research Conclusion</div>
+        <div style='color: #FFFFFF !important; margin-top: 15px; font-size: 1.2rem; line-height: 1.7; font-weight: 500;'>
             <b>Our Project (EffNet-B4)</b> achieves state-of-the-art performance by maintaining 
             the highest accuracy across both internal clinical records and external blind validation sets.
         </div>
