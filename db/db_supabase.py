@@ -9,14 +9,25 @@ from auth_supabase import determine_initial_approval, VALID_ROLES
 from auth_supabase import can_view_all_records
 
 
+import os
+import psycopg2
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+
+
 def get_connection():
     """
-    Placeholder — real implementation added later,
-    once a live Supabase project and connection string exist.
+    Returns a live connection to the Supabase Postgres database.
+    Requires SUPABASE_DB_URL to be set in .env (see .env.example).
     """
-    raise NotImplementedError(
-        "Supabase connection not yet configured — see deploy plan Section C."
-    )
+    if not SUPABASE_DB_URL:
+        raise EnvironmentError(
+            "SUPABASE_DB_URL is not set. Add it to your .env file."
+        )
+    return psycopg2.connect(SUPABASE_DB_URL)
 
 
 def register_user(conn, username: str, password_hash: str, role: str = 'patient') -> bool:

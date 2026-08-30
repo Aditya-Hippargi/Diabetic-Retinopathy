@@ -6,3 +6,4 @@ numpy
 matplotlib
 Pillow
 python-dotenv
+psycopg2-binary
