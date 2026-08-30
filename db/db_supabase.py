@@ -6,6 +6,7 @@ Implements the schema defined in deploy/schema_supabase.sql.
 """
 
 from auth_supabase import determine_initial_approval, VALID_ROLES
+from auth_supabase import can_view_all_records
 
 
 def get_connection():
@@ -66,5 +67,58 @@ def verify_user(conn, username: str, password_hash: str):
     except Exception as e:
         print(f"[Supabase] Verify user error: {e}")
         return None
+    finally:
+        cursor.close()
+
+def insert_scan(conn, patient_name, patient_age, eye_side, grade, grade_name,
+                 confidence, all_probabilities, gradcam_path, model_version,
+                 risk_level, notes, created_by_id):
+    """Insert a new scan record, linked to the user who ran it."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO scans
+                (patient_name, patient_age, eye_side, grade, grade_name,
+                 confidence, all_probabilities, gradcam_path, model_version,
+                 risk_level, notes, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (patient_name, patient_age, eye_side, grade, grade_name,
+             confidence, all_probabilities, gradcam_path, model_version,
+             risk_level, notes, created_by_id),
+        )
+        record_id = cursor.fetchone()[0]
+        conn.commit()
+        return record_id
+    except Exception as e:
+        print(f"[Supabase] Insert scan error: {e}")
+        return None
+    finally:
+        cursor.close()
+
+
+def get_scans(conn, requesting_user_id: int, requesting_role: str):
+    """
+    Fetch scan records, automatically scoped by role:
+      - doctor/researcher/admin: all records
+      - patient: only records they created
+    This scoping happens here, not in the UI layer, so every
+    caller gets it correctly without needing to remember to filter.
+    """
+    try:
+        cursor = conn.cursor()
+        if can_view_all_records(requesting_role):
+            cursor.execute("SELECT * FROM scans ORDER BY scan_date DESC")
+        else:
+            cursor.execute(
+                "SELECT * FROM scans WHERE created_by = %s ORDER BY scan_date DESC",
+                (requesting_user_id,),
+            )
+        return cursor.fetchall()
+    except Exception as e:
+        print(f"[Supabase] Get scans error: {e}")
+        return []
     finally:
         cursor.close()
