@@ -5,8 +5,8 @@ Production database layer for the Supabase (Postgres) backend.
 Implements the schema defined in deploy/schema_supabase.sql.
 """
 
-from auth_supabase import determine_initial_approval, VALID_ROLES
-from auth_supabase import can_view_all_records
+from db.auth_supabase import determine_initial_approval, VALID_ROLES
+from db.auth_supabase import can_view_all_records
 
 
 import os

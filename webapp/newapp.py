@@ -45,9 +45,10 @@ import io
 # ── Path Setup ────────────────────────────────────────────────────────────────
 WEBAPP_DIR  = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(WEBAPP_DIR)
+sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, os.path.join(PROJECT_DIR, 'src'))
 
-from db.db_config import get_db_connection
+from db.db_config import get_connection
 from db.db_supabase import register_user, verify_user, insert_scan, get_scans
 from db.auth_supabase import can_access_scan_and_predict, can_view_all_records
 from new_database import MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS  # constants only, still fine to reuse
@@ -323,7 +324,7 @@ def check_auth():
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Enter Portal", key="login_btn", use_container_width=True):
                     pass_hash = hashlib.sha256(login_pass.encode()).hexdigest()
-                    conn = get_db_connection()
+                    conn = get_connection()
                     result = verify_user(conn, login_user, pass_hash)
                     conn.close()
                     if result:
@@ -356,7 +357,7 @@ def check_auth():
                         st.warning("Username must be >= 3 chars, Password >= 4 chars.")
                     else:
                         pass_hash = hashlib.sha256(reg_pass.encode()).hexdigest()
-                        conn = get_db_connection()
+                        conn = get_connection()
                         success = register_user(conn, reg_user, pass_hash, role=reg_role)
                         conn.close()
                         if success:
@@ -370,7 +371,7 @@ def check_auth():
 
 # ── Database Init ─────────────────────────────────────────────────────────────
 try:
-    conn = get_db_connection()
+    conn = get_connection()
     conn.close()
     db_available = True
 except Exception as e:
