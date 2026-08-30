@@ -74,7 +74,6 @@ st.markdown("""
     /* ── Hide Streamlit Branding ── */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
 
     /* ── Headers & Text ── */
     .stApp .stMarkdown h1, .stApp .stMarkdown h2, .stApp .stMarkdown h3 { color: #2C3E50 !important; }
@@ -322,7 +321,7 @@ def check_auth():
                 login_pass = st.text_input("Portal Password", type="password", key="login_pass", placeholder="••••••••", label_visibility="collapsed")
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Enter Portal", key="login_btn", use_container_width=True):
+                if st.button("Enter Portal", key="login_btn", width='stretch'):
                     pass_hash = hashlib.sha256(login_pass.encode()).hexdigest()
                     conn = get_connection()
                     result = verify_user(conn, login_user, pass_hash)
@@ -350,9 +349,11 @@ def check_auth():
                     "Account Type", ["patient", "doctor", "researcher"],
                     key="reg_role", label_visibility="collapsed"
                 )
+                if reg_role in ("doctor", "researcher"):
+                    st.caption("⏳ Doctor and researcher accounts require admin approval before you can run diagnostics.")
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Register Account", key="reg_btn", use_container_width=True):
+                if st.button("Register Account", key="reg_btn", width='stretch'):
                     if len(reg_user) < 3 or len(reg_pass) < 4:
                         st.warning("Username must be >= 3 chars, Password >= 4 chars.")
                     else:
@@ -531,11 +532,11 @@ elif page == "Scan & Predict":
         if images_ready:
             cols = st.columns(len(images_ready))
             for i, (label, img, _) in enumerate(images_ready):
-                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption=label, use_container_width=True)
+                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption=label, width='stretch')
 
         # ── 🔍 Analysis Trigger  ──
         diag_container = st.empty()
-        if diag_container.button("🔍 Run Full Diagnostic Analysis", use_container_width=True):
+        if diag_container.button("🔍 Run Full Diagnostic Analysis", width='stretch'):
             if not patient_name.strip(): st.warning("Name required."); st.stop()
             if 'last_saved_id' in st.session_state: del st.session_state['last_saved_id']
             st.session_state['new_prediction'] = {} 
@@ -607,9 +608,9 @@ elif page == "Scan & Predict":
             # 4. Grad-CAM Comparison View
             st.markdown("<br><div class='section-header'><h3>Grad-CAM — Clinical Feature Localization</h3></div>", unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
-            with c1: st.image(res['preprocessed'], caption=f"{label} - Preprocessed Fundus", use_container_width=True)
-            with c2: st.image(res['heatmap'], caption=f"{label} - Attention Map", use_container_width=True)
-            with c3: st.image(res['overlay'], caption=f"{label} - Diagnostic Overlay", use_container_width=True)
+            with c1: st.image(res['preprocessed'], caption=f"{label} - Preprocessed Fundus", width='stretch')
+            with c2: st.image(res['heatmap'], caption=f"{label} - Attention Map", width='stretch')
+            with c3: st.image(res['overlay'], caption=f"{label} - Diagnostic Overlay", width='stretch')
 
             # 5. Patient Report (Restored Styling)
             st.markdown(f"""
@@ -625,7 +626,7 @@ elif page == "Scan & Predict":
         if 'last_saved_id' in st.session_state:
             st.success(f"✅ Records Saved: {st.session_state['last_saved_id']}")
         else:
-            if st.button("💾 Save All Findings to Database", use_container_width=True):
+            if st.button("💾 Save All Findings to Database", width='stretch'):
                 from db.db_config import get_connection
                 from db.db_supabase import insert_scan
                 saved_ids = []
@@ -720,7 +721,7 @@ elif page == "Patient Records":
                 
                 col_del = st.columns([1, 4])[0]
                 with col_del:
-                    if st.button(f"🗑️ Delete Record #{rid}", key=f"del_new_{rid}", use_container_width=True):
+                    if st.button(f"🗑️ Delete Record #{rid}", key=f"del_new_{rid}", width='stretch'):
                         if delete_new_scan(rid): st.rerun()
                 st.markdown("<br>", unsafe_allow_html=True)
     else: st.warning("DB connection failed.")
