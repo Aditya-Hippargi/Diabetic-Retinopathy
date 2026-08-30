@@ -616,16 +616,34 @@ elif page == "Scan & Predict":
             st.success(f"✅ Records Saved: {st.session_state['last_saved_id']}")
         else:
             if st.button("💾 Save All Findings to Database", use_container_width=True):
+                from db.db_config import get_connection
+                from db.db_supabase import insert_scan
                 saved_ids = []
+                conn = get_connection()
                 for label, res in results.items():
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     gc_path = os.path.join(PROJECT_DIR, 'data', 'gradcam_outputs', f"{res['name']}_{label}_{ts}.png")
                     os.makedirs(os.path.dirname(gc_path), exist_ok=True)
-                    cv2.imwrite(gc_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR), 
-                                                   cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR), 
-                                                   cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
-                    rid = insert_new_scan(res['name'], res['age'], label, res['grade'], res['conf'], res['probs'].tolist(), gc_path, MODEL_VERSION_82PCT, res['notes'], created_by=current_user)
+                    cv2.imwrite(gc_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR),
+                               cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR),
+                                cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
+                    rid = insert_scan(
+                        conn,
+                        patient_name=res['name'],
+                        patient_age=res['age'],
+                        eye_side=label,
+                        grade=res['grade'],
+                        grade_name=GRADE_NAMES[res['grade']],
+                        confidence=res['conf'],
+                        all_probabilities=res['probs'].tolist(),
+                        gradcam_path=gc_path,
+                        model_version=MODEL_VERSION_82PCT,
+                        risk_level=RISK_LEVELS[res['grade']],
+                        notes=res['notes'],
+                        created_by_id=st.session_state["user_id"],
+                    )
                     if rid: saved_ids.append(str(rid))
+                conn.close()
                 if saved_ids:
                     st.session_state['last_saved_id'] = ", ".join(saved_ids)
                     st.rerun()
