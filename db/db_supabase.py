@@ -133,3 +133,44 @@ def get_scans(conn, requesting_user_id: int, requesting_role: str):
         return []
     finally:
         cursor.close()
+
+def get_stats(conn, requesting_user_id: int, requesting_role: str) -> dict:
+    """
+    Aggregate scan statistics, scoped by role — same rule as get_scans:
+    doctor/researcher/admin see stats across all scans, patient sees
+    only stats derived from their own scans.
+    """
+    try:
+        cursor = conn.cursor()
+        scoped = not can_view_all_records(requesting_role)
+        where = "WHERE created_by = %s" if scoped else ""
+        params = (requesting_user_id,) if scoped else ()
+
+        cursor.execute(f"SELECT COUNT(*) FROM scans {where}", params)
+        total = cursor.fetchone()[0]
+
+        grade_filter = (where + " AND grade > 0") if where else "WHERE grade > 0"
+        cursor.execute(f"SELECT COUNT(*) FROM scans {grade_filter}", params)
+        dr_detected = cursor.fetchone()[0]
+
+        severe_filter = (where + " AND grade >= 3") if where else "WHERE grade >= 3"
+        cursor.execute(f"SELECT COUNT(*) FROM scans {severe_filter}", params)
+        severe = cursor.fetchone()[0]
+
+        grade_dist = {}
+        for g in range(5):
+            g_filter = (where + f" AND grade = {g}") if where else f"WHERE grade = {g}"
+            cursor.execute(f"SELECT COUNT(*) FROM scans {g_filter}", params)
+            grade_dist[g] = cursor.fetchone()[0]
+
+        return {
+            'total': total,
+            'dr_detected': dr_detected,
+            'severe_or_worse': severe,
+            'grade_distribution': grade_dist,
+        }
+    except Exception as e:
+        print(f"[Supabase] Get stats error: {e}")
+        return {}
+    finally:
+        cursor.close()
