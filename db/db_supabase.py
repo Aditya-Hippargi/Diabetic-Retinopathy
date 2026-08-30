@@ -13,6 +13,8 @@ import os
 import psycopg2
 from dotenv import load_dotenv
 
+import json
+
 load_dotenv()
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
@@ -87,6 +89,7 @@ def insert_scan(conn, patient_name, patient_age, eye_side, grade, grade_name,
     """Insert a new scan record, linked to the user who ran it."""
     try:
         cursor = conn.cursor()
+        probs_json = json.dumps(all_probabilities) if all_probabilities is not None else None
         cursor.execute(
             """
             INSERT INTO scans
@@ -97,7 +100,7 @@ def insert_scan(conn, patient_name, patient_age, eye_side, grade, grade_name,
             RETURNING id
             """,
             (patient_name, patient_age, eye_side, grade, grade_name,
-             confidence, all_probabilities, gradcam_path, model_version,
+             confidence, probs_json, gradcam_path, model_version,
              risk_level, notes, created_by_id),
         )
         record_id = cursor.fetchone()[0]
