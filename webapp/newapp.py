@@ -410,7 +410,12 @@ if page == "Dashboard":
     """, unsafe_allow_html=True)
 
     if db_available:
-        stats = get_new_stats(username=current_user)
+        from db.db_config import get_connection
+        from db.db_supabase import get_stats
+        conn = get_connection()
+        stats = get_stats(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
+
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -441,7 +446,10 @@ if page == "Dashboard":
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<br><div class='section-header'><h3>🕐 Recent Scans</h3></div>", unsafe_allow_html=True)
-        for row in get_all_new_scans(username=current_user)[:5]:
+        conn = get_connection()
+        recent_scans = get_scans(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
+        for row in recent_scans[:5]:
             st.markdown(f"""
             <div style='background: white; border-radius: 12px; padding: 15px 25px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border-left: 5px solid {GRADE_COLORS[row[4]]}; display: flex; justify-content: space-between; align-items: center;'>
                 <div>
@@ -629,10 +637,14 @@ elif page == "Scan & Predict":
 elif page == "Patient Records":
     st.markdown("<div class='section-header'><h2>Patient Records</h2><p>Database: scans (EfficientNetB4)</p></div>", unsafe_allow_html=True)
     if db_available:
-        scans = get_all_new_scans(username=current_user)
+        from db.db_config import get_connection
+        from db.db_supabase import get_scans
+        conn = get_connection()
+        scans = get_scans(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
         if not scans:
             st.info("No records found. Complete a scan and click 'Save to Patient Database' to see it here.")
-        
+                
         for r in scans:
             # r indices: 0:id, 1:name, 2:age, 3:eye, 4:grade, 5:grade_name, 6:conf, 7:probs, 8:gradcam, 9:model, 10:risk, 11:date, 12:notes, 13:created_by
             if len(r) >= 13:
