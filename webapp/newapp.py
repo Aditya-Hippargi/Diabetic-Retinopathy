@@ -47,12 +47,10 @@ WEBAPP_DIR  = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(WEBAPP_DIR)
 sys.path.insert(0, os.path.join(PROJECT_DIR, 'src'))
 
-from new_database import (
-    setup_new_database, insert_new_scan, get_all_new_scans,
-    get_new_stats, search_new_scans, delete_new_scan, get_new_scan_by_id,
-    register_user, verify_user,
-    MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS
-)
+from db.db_config import get_db_connection
+from db.db_supabase import register_user, verify_user, insert_scan, get_scans
+from db.auth_supabase import can_access_scan_and_predict, can_view_all_records
+from new_database import MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS  # constants only, still fine to reuse
 import hashlib
 from preprocess import is_retinal_image, ben_graham_preprocessing
 from gradcam_utils import compute_gradcam
@@ -297,7 +295,7 @@ def run_inference(img_array, model):
 
 # ── Authentication Helper ─────────────────────────────────────────────────────
 def check_auth():
-    """Session-based authentication with Login and Sign Up."""
+    """Session-based authentication with Login and Sign Up, role-aware."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
@@ -312,22 +310,29 @@ def check_auth():
                 </div>
                 <br>
             """, unsafe_allow_html=True)
-            
+
             tab1, tab2 = st.tabs(["🔒 Login", "📝 Sign Up"])
 
             with tab1:
                 st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px;'>Username</p>", unsafe_allow_html=True)
                 login_user = st.text_input("Username", placeholder="e.g. admin", key="login_user", label_visibility="collapsed")
-                
+
                 st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Portal Password</p>", unsafe_allow_html=True)
                 login_pass = st.text_input("Portal Password", type="password", key="login_pass", placeholder="••••••••", label_visibility="collapsed")
-                
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Enter Portal", key="login_btn", use_container_width=True):
                     pass_hash = hashlib.sha256(login_pass.encode()).hexdigest()
-                    if verify_user(login_user, pass_hash):
+                    conn = get_db_connection()
+                    result = verify_user(conn, login_user, pass_hash)
+                    conn.close()
+                    if result:
+                        user_id, role, is_approved = result
                         st.session_state["authenticated"] = True
                         st.session_state["username"] = login_user
+                        st.session_state["user_id"] = user_id
+                        st.session_state["role"] = role
+                        st.session_state["is_approved"] = is_approved
                         st.rerun()
                     else:
                         st.error("Access Denied: Invalid Credentials")
@@ -335,33 +340,42 @@ def check_auth():
             with tab2:
                 st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px;'>New Username</p>", unsafe_allow_html=True)
                 reg_user = st.text_input("New Username", placeholder="e.g. doctor_smith", key="reg_user", label_visibility="collapsed")
-                
+
                 st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Create Password</p>", unsafe_allow_html=True)
                 reg_pass = st.text_input("Create Password", type="password", key="reg_pass", placeholder="••••••••", label_visibility="collapsed")
-                
+
+                st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Account Type</p>", unsafe_allow_html=True)
+                reg_role = st.selectbox(
+                    "Account Type", ["patient", "doctor", "researcher"],
+                    key="reg_role", label_visibility="collapsed"
+                )
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Register Account", key="reg_btn", use_container_width=True):
                     if len(reg_user) < 3 or len(reg_pass) < 4:
                         st.warning("Username must be >= 3 chars, Password >= 4 chars.")
                     else:
                         pass_hash = hashlib.sha256(reg_pass.encode()).hexdigest()
-                        if register_user(reg_user, pass_hash):
-                            st.success(f"Account '{reg_user}' created successfully! You can now log in.")
+                        conn = get_db_connection()
+                        success = register_user(conn, reg_user, pass_hash, role=reg_role)
+                        conn.close()
+                        if success:
+                            if reg_role == "patient":
+                                st.success(f"Account '{reg_user}' created successfully! You can now log in.")
+                            else:
+                                st.success(f"Account '{reg_user}' created. A {reg_role} account requires admin approval before you can run predictions — you can log in now, but Scan & Predict will be locked until approved.")
                         else:
                             st.error("Registration failed. Username might already exist.")
         st.stop()
 
 # ── Database Init ─────────────────────────────────────────────────────────────
 try:
-    setup_new_database()
+    conn = get_db_connection()
+    conn.close()
     db_available = True
-    
-    # Safely insert default admin to prevent lockout 
-    # (will return False quietly if account already exists, which is safe)
-    admin_hash = hashlib.sha256("Jeet@0808".encode()).hexdigest()
-    register_user("admin", admin_hash)
-except Exception:
+except Exception as e:
     db_available = False
+    st.error(f"Database connection failed: {e}")
 
 # Protect the entire application after DB is guaranteed to exist
 check_auth() 
