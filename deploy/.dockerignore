@@ -1,0 +1,11 @@
+venv/
+.venv/
+.git/
+.env
+__pycache__/
+*.pyc
+notebooks/
+research/
+tests/
+*.zip
+data/gradcam_outputs/
