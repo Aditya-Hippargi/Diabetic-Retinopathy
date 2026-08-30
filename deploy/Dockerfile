@@ -26,7 +26,4 @@ COPY retinascan_ai.db .
 EXPOSE 8080
 
 # Shell form (not exec array) so ${PORT} actually expands — Cloud Run injects PORT at runtime
-CMD streamlit run webapp/newapp.py \
-    --server.port=${PORT:-8080} \
-    --server.address=0.0.0.0 \
-    --server.headless=true
+CMD ["/bin/sh", "-c", "streamlit run webapp/newapp.py --server.port=${PORT:-8080} --server.address=0.0.0.0 --server.headless=true"]
