@@ -466,6 +466,16 @@ if page == "Dashboard":
 
 # ── PAGE 2: SCAN & PREDICT ────────────────────────────────────────────────────
 elif page == "Scan & Predict":
+    from db.auth_supabase import can_access_scan_and_predict
+
+    if not can_access_scan_and_predict(st.session_state["role"], st.session_state["is_approved"]):
+        st.markdown("""<div class='section-header'><h2>Scan & Predict</h2><p>Upload a retinal fundus image to detect diabetic retinopathy (DR)</p></div>""", unsafe_allow_html=True)
+        if st.session_state["role"] == "patient":
+            st.warning("🔒 Scan & Predict is available to approved doctor and researcher accounts only.")
+        else:
+            st.warning("⏳ Your account is pending admin approval. You'll be able to run diagnostics once approved.")
+        st.stop()
+
     st.markdown("""<div class='section-header'><h2>Scan & Predict</h2><p>Upload a retinal fundus image to detect diabetic retinopathy (DR)</p></div>""", unsafe_allow_html=True)
     model, err = load_model_b4()
     if err: st.error(err); st.stop()
