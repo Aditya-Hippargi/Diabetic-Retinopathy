@@ -27,6 +27,8 @@ def can_access_scan_and_predict(role: str, is_approved: bool) -> bool:
     """Gate for the Scan & Predict page."""
     if role == 'patient':
         return False
+    if role == 'admin':
+        return True
     return role in ('doctor', 'researcher') and is_approved
 
 
