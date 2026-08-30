@@ -629,15 +629,23 @@ elif page == "Scan & Predict":
             if st.button("💾 Save All Findings to Database", width='stretch'):
                 from db.db_config import get_connection
                 from db.db_supabase import insert_scan
+                from db.storage_supabase import upload_gradcam_image
                 saved_ids = []
                 conn = get_connection()
                 for label, res in results.items():
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    gc_path = os.path.join(PROJECT_DIR, 'data', 'gradcam_outputs', f"{res['name']}_{label}_{ts}.png")
-                    os.makedirs(os.path.dirname(gc_path), exist_ok=True)
-                    cv2.imwrite(gc_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR),
+                    safe_label = label.replace(" ", "_")
+                    local_filename = f"{safe_label}_{ts}.png"
+                    local_path = os.path.join(PROJECT_DIR, 'data', 'gradcam_outputs', local_filename)
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    cv2.imwrite(local_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR),
                                cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR),
                                 cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
+
+                    # Upload to Supabase Storage; remote filename includes user_id to avoid collisions
+                    remote_filename = f"{st.session_state['user_id']}/{local_filename}"
+                    gc_url = upload_gradcam_image(local_path, remote_filename)
+
                     rid = insert_scan(
                         conn,
                         patient_name=res['name'],
@@ -647,7 +655,7 @@ elif page == "Scan & Predict":
                         grade_name=GRADE_NAMES[res['grade']],
                         confidence=res['conf'],
                         all_probabilities=res['probs'].tolist(),
-                        gradcam_path=gc_path,
+                        gradcam_path=gc_url,
                         model_version=MODEL_VERSION_82PCT,
                         risk_level=RISK_LEVELS[res['grade']],
                         notes=res['notes'],
