@@ -32,7 +32,9 @@ def can_access_scan_and_predict(role: str, is_approved: bool) -> bool:
 
 def can_view_all_records(role: str) -> bool:
     """
-    Patients only ever see their own records (queries get filtered
-    by created_by elsewhere). Doctors/researchers see everything.
+    Patients and doctors only see their own records (queries get
+    filtered by created_by elsewhere). Researchers and admins see
+    everything — researchers need the full dataset for analysis,
+    admins for oversight.
     """
-    return role in ('doctor', 'researcher', 'admin')
+    return role in ('researcher', 'admin')
