@@ -357,6 +357,12 @@ Both datasets use the same 0–4 DR grading scale (International Clinical DR Sca
 
 ---
 
+## Deployment
+This app is deployed on GCP Cloud Run with a Supabase backend. See `deploy/README.md` for architecture and redeploy instructions.
+
+## Access Control
+Accounts are role-based: `patient` (sees only their own scans, no diagnostic access), `doctor` (approved accounts can run diagnostics, sees only their own scans), `researcher`/`admin` (full access, sees all scans). New doctor/researcher accounts require admin approval before diagnostic access is enabled.
+
 ## Contributing
 
 Contributions, issues, and feature requests are welcome!

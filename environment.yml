@@ -13,3 +13,6 @@ dependencies:
     - numpy
     - matplotlib
     - Pillow
+    - python-dotenv
+    - psycopg2-binary
+    - supabase

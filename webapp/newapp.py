@@ -45,14 +45,13 @@ import io
 # ── Path Setup ────────────────────────────────────────────────────────────────
 WEBAPP_DIR  = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(WEBAPP_DIR)
+sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, os.path.join(PROJECT_DIR, 'src'))
 
-from new_database import (
-    setup_new_database, insert_new_scan, get_all_new_scans,
-    get_new_stats, search_new_scans, delete_new_scan, get_new_scan_by_id,
-    register_user, verify_user,
-    MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS
-)
+from db.db_config import get_connection
+from db.db_supabase import register_user, verify_user, insert_scan, get_scans
+from db.auth_supabase import can_access_scan_and_predict, can_view_all_records
+from new_database import MODEL_VERSION_82PCT, GRADE_NAMES, RISK_LEVELS  # constants only, still fine to reuse
 import hashlib
 from preprocess import is_retinal_image, ben_graham_preprocessing
 from gradcam_utils import compute_gradcam
@@ -75,7 +74,6 @@ st.markdown("""
     /* ── Hide Streamlit Branding ── */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
 
     /* ── Headers & Text ── */
     .stApp .stMarkdown h1, .stApp .stMarkdown h2, .stApp .stMarkdown h3 { color: #2C3E50 !important; }
@@ -297,7 +295,7 @@ def run_inference(img_array, model):
 
 # ── Authentication Helper ─────────────────────────────────────────────────────
 def check_auth():
-    """Session-based authentication with Login and Sign Up."""
+    """Session-based authentication with Login and Sign Up, role-aware."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
@@ -312,22 +310,29 @@ def check_auth():
                 </div>
                 <br>
             """, unsafe_allow_html=True)
-            
+
             tab1, tab2 = st.tabs(["🔒 Login", "📝 Sign Up"])
 
             with tab1:
                 st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px;'>Username</p>", unsafe_allow_html=True)
                 login_user = st.text_input("Username", placeholder="e.g. admin", key="login_user", label_visibility="collapsed")
-                
+
                 st.markdown("<p style='color: #C0392B; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Portal Password</p>", unsafe_allow_html=True)
                 login_pass = st.text_input("Portal Password", type="password", key="login_pass", placeholder="••••••••", label_visibility="collapsed")
-                
+
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Enter Portal", key="login_btn", use_container_width=True):
+                if st.button("Enter Portal", key="login_btn", width='stretch'):
                     pass_hash = hashlib.sha256(login_pass.encode()).hexdigest()
-                    if verify_user(login_user, pass_hash):
+                    conn = get_connection()
+                    result = verify_user(conn, login_user, pass_hash)
+                    conn.close()
+                    if result:
+                        user_id, role, is_approved = result
                         st.session_state["authenticated"] = True
                         st.session_state["username"] = login_user
+                        st.session_state["user_id"] = user_id
+                        st.session_state["role"] = role
+                        st.session_state["is_approved"] = is_approved
                         st.rerun()
                     else:
                         st.error("Access Denied: Invalid Credentials")
@@ -335,33 +340,44 @@ def check_auth():
             with tab2:
                 st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px;'>New Username</p>", unsafe_allow_html=True)
                 reg_user = st.text_input("New Username", placeholder="e.g. doctor_smith", key="reg_user", label_visibility="collapsed")
-                
+
                 st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Create Password</p>", unsafe_allow_html=True)
                 reg_pass = st.text_input("Create Password", type="password", key="reg_pass", placeholder="••••••••", label_visibility="collapsed")
-                
+
+                st.markdown("<p style='color: #2C3E50; font-weight: 700; margin-bottom: 5px; margin-top: 15px;'>Account Type</p>", unsafe_allow_html=True)
+                reg_role = st.selectbox(
+                    "Account Type", ["patient", "doctor", "researcher"],
+                    key="reg_role", label_visibility="collapsed"
+                )
+                if reg_role in ("doctor", "researcher"):
+                    st.caption("⏳ Doctor and researcher accounts require admin approval before you can run diagnostics.")
+
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Register Account", key="reg_btn", use_container_width=True):
+                if st.button("Register Account", key="reg_btn", width='stretch'):
                     if len(reg_user) < 3 or len(reg_pass) < 4:
                         st.warning("Username must be >= 3 chars, Password >= 4 chars.")
                     else:
                         pass_hash = hashlib.sha256(reg_pass.encode()).hexdigest()
-                        if register_user(reg_user, pass_hash):
-                            st.success(f"Account '{reg_user}' created successfully! You can now log in.")
+                        conn = get_connection()
+                        success = register_user(conn, reg_user, pass_hash, role=reg_role)
+                        conn.close()
+                        if success:
+                            if reg_role == "patient":
+                                st.success(f"Account '{reg_user}' created successfully! You can now log in.")
+                            else:
+                                st.success(f"Account '{reg_user}' created. A {reg_role} account requires admin approval before you can run predictions — you can log in now, but Scan & Predict will be locked until approved.")
                         else:
                             st.error("Registration failed. Username might already exist.")
         st.stop()
 
 # ── Database Init ─────────────────────────────────────────────────────────────
 try:
-    setup_new_database()
+    conn = get_connection()
+    conn.close()
     db_available = True
-    
-    # Safely insert default admin to prevent lockout 
-    # (will return False quietly if account already exists, which is safe)
-    admin_hash = hashlib.sha256("Jeet@0808".encode()).hexdigest()
-    register_user("admin", admin_hash)
-except Exception:
+except Exception as e:
     db_available = False
+    st.error(f"Database connection failed: {e}")
 
 # Protect the entire application after DB is guaranteed to exist
 check_auth() 
@@ -395,7 +411,12 @@ if page == "Dashboard":
     """, unsafe_allow_html=True)
 
     if db_available:
-        stats = get_new_stats(username=current_user)
+        from db.db_config import get_connection
+        from db.db_supabase import get_stats
+        conn = get_connection()
+        stats = get_stats(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
+
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -426,7 +447,10 @@ if page == "Dashboard":
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<br><div class='section-header'><h3>🕐 Recent Scans</h3></div>", unsafe_allow_html=True)
-        for row in get_all_new_scans(username=current_user)[:5]:
+        conn = get_connection()
+        recent_scans = get_scans(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
+        for row in recent_scans[:5]:
             st.markdown(f"""
             <div style='background: white; border-radius: 12px; padding: 15px 25px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border-left: 5px solid {GRADE_COLORS[row[4]]}; display: flex; justify-content: space-between; align-items: center;'>
                 <div>
@@ -443,6 +467,16 @@ if page == "Dashboard":
 
 # ── PAGE 2: SCAN & PREDICT ────────────────────────────────────────────────────
 elif page == "Scan & Predict":
+    from db.auth_supabase import can_access_scan_and_predict
+
+    if not can_access_scan_and_predict(st.session_state["role"], st.session_state["is_approved"]):
+        st.markdown("""<div class='section-header'><h2>Scan & Predict</h2><p>Upload a retinal fundus image to detect diabetic retinopathy (DR)</p></div>""", unsafe_allow_html=True)
+        if st.session_state["role"] == "patient":
+            st.warning("🔒 Scan & Predict is available to approved doctor and researcher accounts only.")
+        else:
+            st.warning("⏳ Your account is pending admin approval. You'll be able to run diagnostics once approved.")
+        st.stop()
+
     st.markdown("""<div class='section-header'><h2>Scan & Predict</h2><p>Upload a retinal fundus image to detect diabetic retinopathy (DR)</p></div>""", unsafe_allow_html=True)
     model, err = load_model_b4()
     if err: st.error(err); st.stop()
@@ -498,11 +532,11 @@ elif page == "Scan & Predict":
         if images_ready:
             cols = st.columns(len(images_ready))
             for i, (label, img, _) in enumerate(images_ready):
-                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption=label, use_container_width=True)
+                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption=label, width='stretch')
 
         # ── 🔍 Analysis Trigger  ──
         diag_container = st.empty()
-        if diag_container.button("🔍 Run Full Diagnostic Analysis", use_container_width=True):
+        if diag_container.button("🔍 Run Full Diagnostic Analysis", width='stretch'):
             if not patient_name.strip(): st.warning("Name required."); st.stop()
             if 'last_saved_id' in st.session_state: del st.session_state['last_saved_id']
             st.session_state['new_prediction'] = {} 
@@ -574,9 +608,9 @@ elif page == "Scan & Predict":
             # 4. Grad-CAM Comparison View
             st.markdown("<br><div class='section-header'><h3>Grad-CAM — Clinical Feature Localization</h3></div>", unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
-            with c1: st.image(res['preprocessed'], caption=f"{label} - Preprocessed Fundus", use_container_width=True)
-            with c2: st.image(res['heatmap'], caption=f"{label} - Attention Map", use_container_width=True)
-            with c3: st.image(res['overlay'], caption=f"{label} - Diagnostic Overlay", use_container_width=True)
+            with c1: st.image(res['preprocessed'], caption=f"{label} - Preprocessed Fundus", width='stretch')
+            with c2: st.image(res['heatmap'], caption=f"{label} - Attention Map", width='stretch')
+            with c3: st.image(res['overlay'], caption=f"{label} - Diagnostic Overlay", width='stretch')
 
             # 5. Patient Report (Restored Styling)
             st.markdown(f"""
@@ -592,17 +626,43 @@ elif page == "Scan & Predict":
         if 'last_saved_id' in st.session_state:
             st.success(f"✅ Records Saved: {st.session_state['last_saved_id']}")
         else:
-            if st.button("💾 Save All Findings to Database", use_container_width=True):
+            if st.button("💾 Save All Findings to Database", width='stretch'):
+                from db.db_config import get_connection
+                from db.db_supabase import insert_scan
+                from db.storage_supabase import upload_gradcam_image
                 saved_ids = []
+                conn = get_connection()
                 for label, res in results.items():
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    gc_path = os.path.join(PROJECT_DIR, 'data', 'gradcam_outputs', f"{res['name']}_{label}_{ts}.png")
-                    os.makedirs(os.path.dirname(gc_path), exist_ok=True)
-                    cv2.imwrite(gc_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR), 
-                                                   cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR), 
-                                                   cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
-                    rid = insert_new_scan(res['name'], res['age'], label, res['grade'], res['conf'], res['probs'].tolist(), gc_path, MODEL_VERSION_82PCT, res['notes'], created_by=current_user)
+                    safe_label = label.replace(" ", "_")
+                    local_filename = f"{safe_label}_{ts}.png"
+                    local_path = os.path.join(PROJECT_DIR, 'data', 'gradcam_outputs', local_filename)
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    cv2.imwrite(local_path, cv2.hconcat([cv2.cvtColor(res['preprocessed'], cv2.COLOR_RGB2BGR),
+                               cv2.cvtColor(res['heatmap'], cv2.COLOR_RGB2BGR),
+                                cv2.cvtColor(res['overlay'], cv2.COLOR_RGB2BGR)]))
+
+                    # Upload to Supabase Storage; remote filename includes user_id to avoid collisions
+                    remote_filename = f"{st.session_state['user_id']}/{local_filename}"
+                    gc_url = upload_gradcam_image(local_path, remote_filename)
+
+                    rid = insert_scan(
+                        conn,
+                        patient_name=res['name'],
+                        patient_age=res['age'],
+                        eye_side=label,
+                        grade=res['grade'],
+                        grade_name=GRADE_NAMES[res['grade']],
+                        confidence=res['conf'],
+                        all_probabilities=res['probs'].tolist(),
+                        gradcam_path=gc_url,
+                        model_version=MODEL_VERSION_82PCT,
+                        risk_level=RISK_LEVELS[res['grade']],
+                        notes=res['notes'],
+                        created_by_id=st.session_state["user_id"],
+                    )
                     if rid: saved_ids.append(str(rid))
+                conn.close()
                 if saved_ids:
                     st.session_state['last_saved_id'] = ", ".join(saved_ids)
                     st.rerun()
@@ -614,10 +674,14 @@ elif page == "Scan & Predict":
 elif page == "Patient Records":
     st.markdown("<div class='section-header'><h2>Patient Records</h2><p>Database: scans (EfficientNetB4)</p></div>", unsafe_allow_html=True)
     if db_available:
-        scans = get_all_new_scans(username=current_user)
+        from db.db_config import get_connection
+        from db.db_supabase import get_scans
+        conn = get_connection()
+        scans = get_scans(conn, st.session_state["user_id"], st.session_state["role"])
+        conn.close()
         if not scans:
             st.info("No records found. Complete a scan and click 'Save to Patient Database' to see it here.")
-        
+                
         for r in scans:
             # r indices: 0:id, 1:name, 2:age, 3:eye, 4:grade, 5:grade_name, 6:conf, 7:probs, 8:gradcam, 9:model, 10:risk, 11:date, 12:notes, 13:created_by
             if len(r) >= 13:
@@ -665,7 +729,7 @@ elif page == "Patient Records":
                 
                 col_del = st.columns([1, 4])[0]
                 with col_del:
-                    if st.button(f"🗑️ Delete Record #{rid}", key=f"del_new_{rid}", use_container_width=True):
+                    if st.button(f"🗑️ Delete Record #{rid}", key=f"del_new_{rid}", width='stretch'):
                         if delete_new_scan(rid): st.rerun()
                 st.markdown("<br>", unsafe_allow_html=True)
     else: st.warning("DB connection failed.")

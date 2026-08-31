@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'deploy/Dockerfile'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev/retinascan-ai-507111/retinascan-repo/retinascan-ai'
+      - '.'
+images:
+  - 'asia-south1-docker.pkg.dev/retinascan-ai-507111/retinascan-repo/retinascan-ai'
